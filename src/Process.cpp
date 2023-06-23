@@ -82,15 +82,23 @@ bool ProcessModule::ForAllExportedFunctions2(void(*cb)(void*, ProcessModuleExpor
 	if (MapAndLoad(cstr, NULL, &LoadedImage, TRUE, TRUE)) {
 		ImageExportDirectory = (_IMAGE_EXPORT_DIRECTORY*) ImageDirectoryEntryToData(LoadedImage.MappedAddress, false, IMAGE_DIRECTORY_ENTRY_EXPORT, &cDirSize);
 		if (ImageExportDirectory != NULL) {
-			DWORD* dNameRVAs = (DWORD*)ImageRvaToVa(LoadedImage.FileHeader, LoadedImage.MappedAddress, ImageExportDirectory->AddressOfNames, NULL);
+			WORD* dOrdRVAs = (WORD*)ImageRvaToVa(LoadedImage.FileHeader, LoadedImage.MappedAddress, ImageExportDirectory->AddressOfNameOrdinals, NULL);
 			DWORD* dFunRVAs = (DWORD*)ImageRvaToVa(LoadedImage.FileHeader, LoadedImage.MappedAddress, ImageExportDirectory->AddressOfFunctions, NULL);
-			for (size_t i = 0; i < ImageExportDirectory->NumberOfNames; i++) {
-				const char* cname = (const char*)ImageRvaToVa(LoadedImage.FileHeader, LoadedImage.MappedAddress, dNameRVAs[i], NULL);
-				char* target = (char*)ImageRvaToVa(LoadedImage.FileHeader, LoadedImage.MappedAddress, dFunRVAs[i], NULL);
-				char* base = (char*)LoadedImage.MappedAddress;
+			DWORD* dNameRVAs = (DWORD*)ImageRvaToVa(LoadedImage.FileHeader, LoadedImage.MappedAddress, ImageExportDirectory->AddressOfNames, NULL);
+
+			for (size_t ordI = 0; ordI < ImageExportDirectory->NumberOfFunctions; ordI++) {
+				char* target = (char*)ImageRvaToVa(LoadedImage.FileHeader, LoadedImage.MappedAddress, dFunRVAs[ordI], NULL);
 				char* off = (char*)(LoadedImage.Sections->VirtualAddress - LoadedImage.Sections->PointerToRawData);
-				ProcessModuleExportedFunction fun(cname, (void*)(target - base + off));
-				cb(instance, &fun);
+				target -= (unsigned int)LoadedImage.MappedAddress;
+				target += (unsigned int)off;
+				for (size_t nameI = 0; nameI < ImageExportDirectory->NumberOfNames; nameI++) {
+					if (dOrdRVAs[nameI] == ordI) {
+						const char* cname = (const char*)ImageRvaToVa(LoadedImage.FileHeader, LoadedImage.MappedAddress, dNameRVAs[nameI], NULL);
+						ProcessModuleExportedFunction fun(cname, target);
+						cb(instance, &fun);
+						break;
+					}
+				}
 			}
 		} else {
 			LOG_ERROR("Call to ImageDirectoryEntryToData failed: %d", GetLastError());
@@ -311,8 +319,9 @@ bool Process::ForAllModules2(void(*cb)(void*, ProcessModule*), void* instance) {
 	if (realReq <= dummyReq) {
 		for (DWORD i = 0; i < realReq; i++) {
 			HMODULE mod = modules[i];
-			forEachModule(mod);
-			break;
+			if (!forEachModule(mod)) {
+				break;
+			}
 		}
 		return true;
 	} else {
